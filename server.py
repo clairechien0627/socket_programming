@@ -1,27 +1,110 @@
-import socket  # 匯入標準庫 socket
+from __future__ import annotations
+import argparse
+import socket
+import threading
+from contextlib import suppress
 
-HOST = "127.0.0.1"  # 伺服器綁定的 IP（本機）
-PORT = 5678         # 伺服器綁定的 UDP 埠號
-BUFFER_SIZE = 256   # 每次接收的最大位元組數（對應原 C 的 buf 大小）
+HOST = "0.0.0.0"
+PORT = 5678
+ENCODING = "utf-8"
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # 建立 IPv4/UDP socket（SOCK_DGRAM）
-sock.bind((HOST, PORT))                                   # 綁定位址與埠（UDP 無需 listen/accept）
-print(f"[udp server] listening on {HOST}:{PORT} ...")     # 顯示監聽資訊
+clients = {}
+clients_lock = threading.Lock()
 
-try:                                                      # 進入服務迴圈，直到鍵盤中斷
-    while True:                                           # 持續處理收到的每個資料報
-        data, addr = sock.recvfrom(BUFFER_SIZE)           # 接收一個 UDP 資料報，取得資料與來源位址
-        if data == b"":                                   # 處理零長度資料報（合法但無內容）
-            print(f"Read Message: <empty> from {addr}")   # 印出收到空訊息
-            sock.sendto(data, addr)                       # 回送空封包（維持 echo 行為）
-            continue                                      # 繼續等待下一個封包
-        text = data.decode(errors="replace").rstrip("\n") # 嘗試把 bytes 轉字串以便列印（錯誤以替代符號）
-        print(f"Read Message: {text} from {addr}")        # 顯示收到的內容與來源
-        sock.sendto(data, addr)                           # 將同一批 bytes 回送給來源（UDP echo）
-        print(f"Send Message: {text} to {addr}")          # 顯示已回送的內容與目標
-except KeyboardInterrupt:                                 # 捕捉 Ctrl+C 中斷
-    pass                                                  # 忽略並進入收尾
-finally:                                                  # 確保離開前關閉 socket
-    sock.close()                                          # 關閉 UDP socket
-    print("[udp server] socket closed.")                  # 顯示關閉訊息
+
+def broadcast(message: str, sender: str | None = None) -> None:
+    """Send message to every connected client except the sender."""
+    data = message.encode(ENCODING)
+    with clients_lock:
+        targets = [conn for nick, conn in clients.items() if nick != sender]
+    for conn in targets:
+        with suppress(OSError):
+            conn.sendall(data)
+
+
+def safe_register(nickname: str, conn: socket.socket) -> str:
+    candidate = nickname or "guest"
+    with clients_lock:
+        base = candidate
+        suffix = 1
+        while candidate in clients:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        clients[candidate] = conn
+    return candidate
+
+
+def remove_client(nickname: str) -> None:
+    with clients_lock:
+        conn = clients.pop(nickname, None)
+    if conn:
+        with suppress(OSError):
+            conn.close()
+
+
+def handle_client(conn: socket.socket, address: tuple[str, int]) -> None:
+    nickname = "unknown"
+    registered = False
+    try:
+        conn.sendall(b"Enter nickname: ")
+        raw = conn.recv(1024)
+        if not raw:
+            return
+        nickname = safe_register(raw.decode(ENCODING, errors="ignore").strip(), conn)
+        registered = True
+        conn.sendall(f"Welcome {nickname}! Type /quit to exit.\n".encode(ENCODING))
+        broadcast(f"[system] {nickname} joined the chat.\n")
+        while True:
+            data = conn.recv(1024)
+            if not data:
+                break
+            message = data.decode(ENCODING, errors="ignore").rstrip("\r\n")
+            if message == "/quit":
+                conn.sendall(b"Goodbye!\n")
+                break
+            broadcast(f"{nickname}: {message}\n", sender=nickname)
+    except ConnectionResetError:
+        pass
+    finally:
+        if registered:
+            remove_client(nickname)
+            broadcast(f"[system] {nickname} left the chat.\n")
+            print(f"Disconnected: {nickname} {address}")
+        else:
+            with suppress(OSError):
+                conn.close()
+
+
+def serve_forever(host: str, port: int) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((host, port))
+        server.listen()
+        print(f"[chat server] listening on {host}:{port}")
+        try:
+            while True:
+                conn, address = server.accept()
+                print(f"Connected: {address}")
+                thread = threading.Thread(target=handle_client, args=(conn, address), daemon=True)
+                thread.start()
+        except KeyboardInterrupt:
+            print("Stopping server...")
+        finally:
+            with clients_lock:
+                active = list(clients.keys())
+            for nickname in active:
+                remove_client(nickname)
+            print("Server stopped.")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Multi-client TCP chat server")
+    parser.add_argument("--host", default=HOST, help="Host/IP to bind")
+    parser.add_argument("--port", type=int, default=PORT, help="TCP port to bind")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    serve_forever(args.host, args.port)
 
