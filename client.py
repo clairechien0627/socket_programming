@@ -89,13 +89,75 @@ class ChatGUI:
         self.sock: socket.socket | None = None
         self.stop_event = threading.Event()
         self.queue: queue.Queue[str] = queue.Queue()
+        
+        # 建立主視窗
         self.root = tk.Tk()
-        self.root.title(f"Chat - {nickname}")
-        self.text = scrolledtext.ScrolledText(self.root, state=tk.DISABLED, wrap=tk.WORD, width=60, height=20)
-        self.text.pack(padx=12, pady=12, fill=tk.BOTH, expand=True)
-        self.entry = tk.Entry(self.root)
-        self.entry.pack(padx=12, pady=(0, 12), fill=tk.X)
+        self.root.title(f"聊天室 - {nickname}")
+        self.root.geometry("700x550")
+        
+        # 頂部資訊列
+        info_frame = tk.Frame(self.root, bg="#2c3e50", height=40)
+        info_frame.pack(fill=tk.X, side=tk.TOP)
+        info_frame.pack_propagate(False)
+        
+        title_label = tk.Label(info_frame, text=f"👤 {nickname}", 
+                              bg="#2c3e50", fg="white", font=("Arial", 11, "bold"))
+        title_label.pack(side=tk.LEFT, padx=15, pady=8)
+        
+        self.status_label = tk.Label(info_frame, text="● 連線中", 
+                                     bg="#2c3e50", fg="#2ecc71", font=("Arial", 9))
+        self.status_label.pack(side=tk.RIGHT, padx=15, pady=8)
+        
+        # 訊息顯示區域
+        chat_frame = tk.Frame(self.root, bg="#ecf0f1")
+        chat_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
+        
+        self.text = scrolledtext.ScrolledText(
+            chat_frame, 
+            state=tk.DISABLED, 
+            wrap=tk.WORD, 
+            bg="#ffffff",
+            font=("Arial", 10),
+            relief=tk.FLAT,
+            padx=10,
+            pady=10
+        )
+        self.text.pack(fill=tk.BOTH, expand=True)
+        
+        # 設定訊息標籤樣式
+        self.text.tag_config("system", foreground="#95a5a6", font=("Arial", 9, "italic"))
+        self.text.tag_config("self", foreground="#2980b9", font=("Arial", 10, "bold"))
+        self.text.tag_config("other", foreground="#27ae60", font=("Arial", 10, "bold"))
+        self.text.tag_config("message", foreground="#2c3e50", font=("Arial", 10))
+        
+        # 輸入區域
+        input_frame = tk.Frame(self.root, bg="#ecf0f1")
+        input_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
+        
+        # 使用 Text 而非 Entry 以支援多行
+        self.entry = tk.Text(input_frame, height=3, wrap=tk.WORD, font=("Arial", 10))
+        self.entry.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         self.entry.bind("<Return>", self.on_send)
+        self.entry.bind("<Shift-Return>", self.on_newline)
+        self.entry.focus()
+        
+        # 按鈕區域
+        button_frame = tk.Frame(input_frame, bg="#ecf0f1")
+        button_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        send_button = tk.Button(
+            button_frame, 
+            text="發送\n(Enter)", 
+            command=self.on_send,
+            bg="#3498db",
+            fg="white",
+            font=("Arial", 9, "bold"),
+            width=8,
+            relief=tk.FLAT,
+            cursor="hand2"
+        )
+        send_button.pack(fill=tk.BOTH, expand=True)
+        
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def start(self) -> None:
@@ -117,8 +179,28 @@ class ChatGUI:
         self.root.mainloop()
 
     def append_text(self, message: str) -> None:
+        """智慧顯示訊息,根據類型套用不同樣式"""
         self.text.configure(state=tk.NORMAL)
-        self.text.insert(tk.END, message)
+        
+        # 判斷訊息類型並套用樣式
+        if message.startswith("[system]"):
+            self.text.insert(tk.END, message, "system")
+        elif message.startswith(f"{self.nickname} (you):"):
+            # 自己的訊息
+            parts = message.split(":", 1)
+            self.text.insert(tk.END, parts[0] + ": ", "self")
+            if len(parts) > 1:
+                self.text.insert(tk.END, parts[1], "message")
+        elif ":" in message and not message.startswith("Welcome"):
+            # 別人的訊息
+            parts = message.split(":", 1)
+            self.text.insert(tk.END, parts[0] + ": ", "other")
+            if len(parts) > 1:
+                self.text.insert(tk.END, parts[1], "message")
+        else:
+            # 一般訊息
+            self.text.insert(tk.END, message)
+        
         self.text.see(tk.END)
         self.text.configure(state=tk.DISABLED)
 
@@ -133,17 +215,23 @@ class ChatGUI:
             self.on_close()
 
     def on_send(self, event=None) -> None:
-        text = self.entry.get().strip()
+        """發送訊息 (Enter 鍵或點擊按鈕)"""
+        text = self.entry.get("1.0", tk.END).strip()
         if not text:
-            return
+            return "break"  # 防止 Text widget 預設行為
         if text == "/quit":
             self.on_close()
-            return
+            return "break"
         if self.sock:
             with suppress(OSError):
                 self.sock.sendall(f"{text}\n".encode(ENCODING))
         self.append_text(f"{self.nickname} (you): {text}\n")
-        self.entry.delete(0, tk.END)
+        self.entry.delete("1.0", tk.END)
+        return "break"  # 防止換行
+    
+    def on_newline(self, event=None) -> None:
+        """Shift+Enter 換行"""
+        return None  # 允許預設行為 (插入換行)
 
     def on_close(self) -> None:
         self.stop_event.set()
