@@ -2,24 +2,69 @@ from __future__ import annotations
 import argparse
 import socket
 import threading
+import struct
 from contextlib import suppress
 
 HOST = "0.0.0.0"
 PORT = 5678
 ENCODING = "utf-8"
+BUFFER_SIZE = 1024  # 限制 buffer 大小以測試訊息分割
 
 clients = {}
 clients_lock = threading.Lock()
 
 
+def send_message(conn: socket.socket, message: str) -> None:
+    """使用長度前綴協議發送完整訊息,支援超過 buffer size 的大訊息"""
+    try:
+        data = message.encode(ENCODING)
+        length = len(data)
+        # 發送 4 bytes 的訊息長度 (big-endian)
+        conn.sendall(struct.pack('>I', length))
+        # 分塊發送實際訊息內容
+        sent = 0
+        while sent < length:
+            chunk = data[sent:sent + BUFFER_SIZE]
+            conn.sendall(chunk)
+            sent += len(chunk)
+    except OSError:
+        pass
+
+
+def recv_message(conn: socket.socket) -> str | None:
+    """使用長度前綴協議接收完整訊息,支援超過 buffer size 的大訊息"""
+    try:
+        # 先接收 4 bytes 的長度資訊
+        length_data = b''
+        while len(length_data) < 4:
+            chunk = conn.recv(4 - len(length_data))
+            if not chunk:
+                return None
+            length_data += chunk
+        
+        length = struct.unpack('>I', length_data)[0]
+        
+        # 根據長度接收完整訊息
+        data = b''
+        while len(data) < length:
+            remaining = length - len(data)
+            chunk_size = min(BUFFER_SIZE, remaining)
+            chunk = conn.recv(chunk_size)
+            if not chunk:
+                return None
+            data += chunk
+        
+        return data.decode(ENCODING, errors='ignore')
+    except OSError:
+        return None
+
+
 def broadcast(message: str, sender: str | None = None) -> None:
     """Send message to every connected client except the sender."""
-    data = message.encode(ENCODING)
     with clients_lock:
-        targets = [conn for nick, conn in clients.items() if nick != sender]
-    for conn in targets:
-        with suppress(OSError):
-            conn.sendall(data)
+        targets = [(nick, conn) for nick, conn in clients.items() if nick != sender]
+    for nick, conn in targets:
+        send_message(conn, message)
 
 
 def safe_register(nickname: str, conn: socket.socket) -> str:
@@ -46,22 +91,23 @@ def handle_client(conn: socket.socket, address: tuple[str, int]) -> None:
     nickname = "unknown"
     registered = False
     try:
-        conn.sendall(b"Enter nickname: ")
-        raw = conn.recv(1024)
-        if not raw:
+        send_message(conn, "Enter nickname: ")
+        nickname_input = recv_message(conn)
+        if not nickname_input:
             return
-        nickname = safe_register(raw.decode(ENCODING, errors="ignore").strip(), conn)
+        nickname = safe_register(nickname_input.strip(), conn)
         registered = True
-        conn.sendall(f"Welcome {nickname}! Type /quit to exit.\n".encode(ENCODING))
+        send_message(conn, f"Welcome {nickname}! Type /quit to exit.\n")
         broadcast(f"[system] {nickname} joined the chat.\n")
         while True:
-            data = conn.recv(1024)
-            if not data:
+            message = recv_message(conn)
+            if not message:
                 break
-            message = data.decode(ENCODING, errors="ignore").rstrip("\r\n")
+            message = message.rstrip("\r\n")
             if message == "/quit":
-                conn.sendall(b"Goodbye!\n")
+                send_message(conn, "Goodbye!\n")
                 break
+            print(f"[{nickname}] sent {len(message)} bytes: {message[:50]}{'...' if len(message) > 50 else ''}")
             broadcast(f"{nickname}: {message}\n", sender=nickname)
     except ConnectionResetError:
         pass

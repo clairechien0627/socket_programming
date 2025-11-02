@@ -5,11 +5,13 @@ import socket
 import threading
 import queue
 import sys
+import struct
 from contextlib import suppress
 
 HOST = "127.0.0.1"
 PORT = 5678
 ENCODING = "utf-8"
+BUFFER_SIZE = 1024  # 限制 buffer 大小以測試訊息分割
 
 try:
     import tkinter as tk
@@ -20,25 +22,67 @@ except ModuleNotFoundError:  # GUI remains optional
     messagebox = None
 
 
+def send_message(sock: socket.socket, message: str) -> None:
+    """使用長度前綴協議發送完整訊息"""
+    data = message.encode(ENCODING)
+    length = len(data)
+    # 發送 4 bytes 的訊息長度
+    sock.sendall(struct.pack('>I', length))
+    # 分塊發送訊息內容
+    sent = 0
+    while sent < length:
+        chunk = data[sent:sent + BUFFER_SIZE]
+        sock.sendall(chunk)
+        sent += len(chunk)
+
+
+def recv_message(sock: socket.socket) -> str | None:
+    """使用長度前綴協議接收完整訊息"""
+    try:
+        # 接收 4 bytes 長度
+        length_data = b''
+        while len(length_data) < 4:
+            chunk = sock.recv(4 - len(length_data))
+            if not chunk:
+                return None
+            length_data += chunk
+        
+        length = struct.unpack('>I', length_data)[0]
+        
+        # 接收完整訊息
+        data = b''
+        while len(data) < length:
+            remaining = length - len(data)
+            chunk_size = min(BUFFER_SIZE, remaining)
+            chunk = sock.recv(chunk_size)
+            if not chunk:
+                return None
+            data += chunk
+        
+        return data.decode(ENCODING, errors='ignore')
+    except OSError:
+        return None
+
+
 def connect_to_server(host: str, port: int, nickname: str) -> tuple[socket.socket, str]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((host, port))
-    greeting = sock.recv(1024).decode(ENCODING, errors="ignore")
-    sock.sendall(f"{nickname}\n".encode(ENCODING))
-    return sock, greeting
+    greeting = recv_message(sock)
+    send_message(sock, f"{nickname}\n")
+    return sock, greeting or ""
 
 
 def receiver_loop(sock: socket.socket, stop_event: threading.Event, on_message) -> None:
     while not stop_event.is_set():
         try:
-            data = sock.recv(1024)
+            data = recv_message(sock)
         except OSError:
             break
         if not data:
             stop_event.set()
             on_message("[system] Connection closed by server.\n")
             break
-        on_message(data.decode(ENCODING, errors="ignore"))
+        on_message(data)
 
 
 def console_client(host: str, port: int, nickname: str) -> None:
@@ -65,9 +109,9 @@ def console_client(host: str, port: int, nickname: str) -> None:
             if message.strip() == "":
                 continue
             if message == "/quit":
-                sock.sendall(b"/quit\n")
+                send_message(sock, "/quit\n")
                 break
-            sock.sendall(f"{message}\n".encode(ENCODING))
+            send_message(sock, f"{message}\n")
             display(f"{nickname} (you): {message}\n")
     except OSError as exc:
         print(f"Failed to connect: {exc}")
@@ -224,7 +268,7 @@ class ChatGUI:
             return "break"
         if self.sock:
             with suppress(OSError):
-                self.sock.sendall(f"{text}\n".encode(ENCODING))
+                send_message(self.sock, f"{text}\n")
         self.append_text(f"{self.nickname} (you): {text}\n")
         self.entry.delete("1.0", tk.END)
         return "break"  # 防止換行
@@ -237,7 +281,7 @@ class ChatGUI:
         self.stop_event.set()
         if self.sock:
             with suppress(OSError):
-                self.sock.sendall(b"/quit\n")
+                send_message(self.sock, "/quit\n")
                 self.sock.shutdown(socket.SHUT_RDWR)
                 self.sock.close()
         self.root.destroy()
