@@ -12,11 +12,6 @@ timeout /t 1 /nobreak >nul
 echo Starting client Bob with GUI...
 start "Bob" python hybrid\hybrid_client.py Bob --gui
 
-timeout /t 1 /nobreak >nul
-
-echo Starting client Bob with GUI...
-start "Candy" python hybrid\hybrid_client.py Candy --gui
-
 echo.
 echo All processes started!
 echo Close each window when you're done testing.
