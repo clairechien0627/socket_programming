@@ -112,6 +112,19 @@ def broadcast_encrypted(message: str, sender: str | None = None) -> None:
             send_encrypted(conn, message, crypto)
 
 
+def broadcast_udp(udp_sock: socket.socket, message: str, sender: str | None = None) -> None:
+    """UDP 廣播訊息給所有客戶端 (除了發送者)"""
+    with clients_lock:
+        targets = [(info['udp_addr']) 
+                   for nick, info in clients.items() 
+                   if nick != sender and info.get('udp_addr')]
+    
+    data = message.encode(ENCODING)
+    for addr in targets:
+        with suppress(OSError):
+            udp_sock.sendto(data, addr)
+
+
 def safe_register(nickname: str, conn: socket.socket, crypto: CryptoManager) -> str:
     """註冊客戶端"""
     candidate = nickname or "guest"
@@ -308,6 +321,14 @@ def handle_udp_messages(udp_sock: socket.socket) -> None:
                         clients[nickname]['udp_addr'] = addr
                         clients[nickname]['last_heartbeat'] = time.time()
                 udp_sock.sendto(b"ACK", addr)
+                
+            elif command == "TYPING":
+                # 正在輸入狀態
+                with clients_lock:
+                    if nickname in clients:
+                        clients[nickname]['last_heartbeat'] = time.time()
+                # 廣播給其他客戶端
+                broadcast_udp(udp_sock, f"TYPING|{nickname}", sender=nickname)
                 
             elif command == "REGISTER":
                 with clients_lock:

@@ -261,8 +261,16 @@ def console_client(host: str, tcp_port: int, udp_port: int, nickname: str) -> No
             print(text, end="")
         
         def display_udp(text: str) -> None:
-            if text == "ACK" or text == "REGISTERED":
-                pass
+            if text.startswith("TYPING|"):
+                parts = text.split('|', 1)
+                if len(parts) == 2:
+                    # 在同一行顯示,不影響聊天記錄
+                    sys.stdout.write(f"\r💬 {parts[1]} 正在輸入...{' '*30}")
+                    sys.stdout.flush()
+                    # 2 秒後清除
+                    threading.Timer(2.0, lambda: sys.stdout.write("\r" + " "*60 + "\r")).start()
+            elif text == "ACK" or text == "REGISTERED":
+                pass  # 心跳回應,不顯示
         
         # 啟動執行緒
         threading.Thread(target=tcp_receiver_loop, 
@@ -280,6 +288,9 @@ def console_client(host: str, tcp_port: int, udp_port: int, nickname: str) -> No
         print("="*60)
         print("指令: /quit=離開 | /users=查看在線用戶\n")
         
+        # 用於控制「正在輸入」發送頻率
+        last_typing_time = 0
+        
         while not stop_event.is_set():
             try:
                 message = input()
@@ -294,6 +305,14 @@ def console_client(host: str, tcp_port: int, udp_port: int, nickname: str) -> No
                 send_encrypted(tcp_sock, "/quit", crypto)
                 break
             
+            # 發送正在輸入狀態 (UDP)
+            current_time = time.time()
+            if current_time - last_typing_time > 2:  # 每 2 秒最多發送一次
+                last_typing_time = current_time
+                with suppress(OSError):
+                    udp_sock.sendto(f"TYPING|{nickname}".encode(ENCODING), server_udp_addr)
+            
+            # 發送訊息 (TCP 加密)
             send_encrypted(tcp_sock, message, crypto)
     
     except OSError as exc:
@@ -322,6 +341,7 @@ class SecureChatGUI:
         self.crypto: CryptoManager | None = None
         self.stop_event = threading.Event()
         self.tcp_queue: queue.Queue[str] = queue.Queue()
+        self.udp_queue: queue.Queue[str] = queue.Queue()
         
         # 建立 GUI
         self.root = tk.Tk()
@@ -355,6 +375,24 @@ class SecureChatGUI:
         chat_frame = tk.Frame(self.root, bg="#ecf0f1")
         chat_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
         
+        # 正在輸入狀態列 (在聊天區域上方)
+        self.typing_frame = tk.Frame(chat_frame, bg="#f8f9fa", height=25, relief=tk.FLAT)
+        self.typing_frame.pack(fill=tk.X, pady=(0, 2))
+        self.typing_frame.pack_propagate(False)
+        
+        self.typing_label = tk.Label(
+            self.typing_frame, 
+            text="",
+            bg="#f8f9fa",
+            fg="#6c757d",
+            font=("Arial", 9, "italic"),
+            anchor="w",
+            padx=10
+        )
+        self.typing_label.pack(fill=tk.BOTH, expand=True)
+        self.typing_users = set()  # 追蹤正在輸入的用戶
+        self.typing_timers = {}  # 用戶的清除計時器
+        
         self.text = scrolledtext.ScrolledText(
             chat_frame, state=tk.DISABLED, wrap=tk.WORD,
             bg="#ffffff", font=("Arial", 10), relief=tk.FLAT, padx=10, pady=10
@@ -375,6 +413,7 @@ class SecureChatGUI:
         self.entry.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         self.entry.bind("<Return>", self.on_send)
         self.entry.bind("<Shift-Return>", self.on_newline)
+        self.entry.bind("<KeyRelease>", self.on_typing)
         self.entry.focus()
         
         # 發送按鈕
@@ -387,6 +426,8 @@ class SecureChatGUI:
             width=8, relief=tk.FLAT, cursor="hand2"
         )
         send_button.pack(fill=tk.BOTH, expand=True)
+        
+        self.last_typing_time = 0
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
     
@@ -423,6 +464,9 @@ class SecureChatGUI:
         threading.Thread(target=tcp_receiver_loop,
                         args=(self.tcp_sock, self.crypto, self.stop_event, self.tcp_queue.put),
                         daemon=True).start()
+        threading.Thread(target=udp_receiver_loop,
+                        args=(self.udp_sock, self.stop_event, self.udp_queue.put),
+                        daemon=True).start()
         threading.Thread(target=heartbeat_loop,
                         args=(self.udp_sock, server_udp_addr, self.nickname, self.stop_event),
                         daemon=True).start()
@@ -455,12 +499,69 @@ class SecureChatGUI:
         while not self.tcp_queue.empty():
             self.append_text(self.tcp_queue.get())
         
+        # 處理 UDP 訊息
+        while not self.udp_queue.empty():
+            udp_msg = self.udp_queue.get()
+            if udp_msg.startswith("TYPING|"):
+                parts = udp_msg.split('|', 1)
+                if len(parts) == 2:
+                    username = parts[1]
+                    self.add_typing_user(username)
+        
         if not self.stop_event.is_set():
             self.root.after(100, self.process_queues)
         else:
             if messagebox:
-                messagebox.showinfo("已斷線", "安全連線已關閉.")
+                messagebox.showinfo("已斷線", "連線已關閉.")
             self.on_close()
+    
+    def add_typing_user(self, username: str) -> None:
+        """添加正在輸入的用戶"""
+        # 取消之前的計時器
+        if username in self.typing_timers:
+            self.root.after_cancel(self.typing_timers[username])
+        
+        # 添加用戶到集合
+        self.typing_users.add(username)
+        self.update_typing_display()
+        
+        # 設定 3 秒後清除
+        timer_id = self.root.after(3000, lambda: self.remove_typing_user(username))
+        self.typing_timers[username] = timer_id
+    
+    def remove_typing_user(self, username: str) -> None:
+        """移除正在輸入的用戶"""
+        self.typing_users.discard(username)
+        if username in self.typing_timers:
+            del self.typing_timers[username]
+        self.update_typing_display()
+    
+    def update_typing_display(self) -> None:
+        """更新正在輸入的顯示"""
+        if not self.typing_users:
+            self.typing_label.config(text="")
+            self.typing_frame.config(bg="#f8f9fa")
+        else:
+            users = sorted(self.typing_users)
+            if len(users) == 1:
+                text = f"💬 {users[0]} 正在輸入..."
+            elif len(users) == 2:
+                text = f"💬 {users[0]} 和 {users[1]} 正在輸入..."
+            else:
+                text = f"💬 {users[0]} 和其他 {len(users)-1} 人正在輸入..."
+            
+            self.typing_label.config(text=text)
+            self.typing_frame.config(bg="#e8f4f8")
+    
+    def on_typing(self, event=None) -> None:
+        """發送正在輸入狀態 (UDP)"""
+        current_time = time.time()
+        if current_time - self.last_typing_time > 2:  # 每 2 秒最多發送一次
+            self.last_typing_time = current_time
+            if self.udp_sock:
+                with suppress(OSError):
+                    server_addr = (self.host, self.udp_port)
+                    self.udp_sock.sendto(f"TYPING|{self.nickname}".encode(ENCODING), server_addr)
     
     def on_send(self, event=None) -> None:
         """發送訊息"""
@@ -474,6 +575,9 @@ class SecureChatGUI:
         if self.tcp_sock and self.crypto:
             with suppress(OSError):
                 send_encrypted(self.tcp_sock, text, self.crypto)
+        
+        # 清除自己的輸入狀態
+        self.remove_typing_user(self.nickname)
         
         self.entry.delete("1.0", tk.END)
         return "break"
