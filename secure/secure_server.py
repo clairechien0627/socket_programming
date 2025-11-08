@@ -258,7 +258,8 @@ def handle_tcp_client(conn: socket.socket, address: tuple[str, int]) -> None:
             message = message.rstrip("\r\n")
             
             if message == "/quit":
-                send_encrypted(conn, "Goodbye!", client_crypto)
+                with suppress(OSError, ValueError):
+                    send_encrypted(conn, "Goodbye!", client_crypto)
                 break
             elif message == "/users":
                 with clients_lock:

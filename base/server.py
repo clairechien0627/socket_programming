@@ -105,7 +105,8 @@ def handle_client(conn: socket.socket, address: tuple[str, int]) -> None:
                 break
             message = message.rstrip("\r\n")
             if message == "/quit":
-                send_message(conn, "Goodbye!\n")
+                with suppress(OSError):
+                    send_message(conn, "Goodbye!\n")
                 break
             print(f"[{nickname}] sent {len(message)} bytes: {message[:50]}{'...' if len(message) > 50 else ''}")
             broadcast(f"{nickname}: {message}\n", sender=nickname)
