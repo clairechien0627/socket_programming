@@ -3,12 +3,18 @@
 ## 📋 目錄
 - [專案概述](#專案概述)
 - [功能實作](#功能實作)
-  - [+10 Multi-client Connections](#10-multi-client-connections)
-  - [+10 Multi-thread](#10-multi-thread)
-  - [+5 Message Split](#5-message-split)
-  - [+5 Use Both UDP & TCP](#5-use-both-udp--tcp)
+  - [Baseline (80分) - Basic TCP or UDP application](#baseline-80分---basic-tcp-or-udp-application)
+  - [+10 Multi-client connections](#10-multi-client-connections)
+  - [+10 Multi-process or multi-thread](#10-multi-process-or-multi-thread)
   - [+10 GUI](#10-gui)
-  - [+5 Message Encryption & Decryption](#5-message-encryption--decryption)
+  - [+5 Message split](#5-message-split)
+  - [+5 Use both UDP & TCP and Explain why](#5-use-both-udp--tcp-and-explain-why)
+  - [+5 Message encryption & decryption](#5-message-encryption--decryption)
+  - [+5 Time out handling](#5-time-out-handling)
+  - [+5 Disconnection handling & Auto Reconnection handling](#5-disconnection-handling--auto-reconnection-handling)
+  - [+5 Multi Port Listing](#5-multi-port-listing)
+  - [+5 Nonblocking and explain why](#5-nonblocking-and-explain-why)
+  - [+20 P2P](#20-p2p)
 - [架構設計](#架構設計)
 - [測試方法](#測試方法)
 
@@ -20,14 +26,1373 @@
 - ✅ **基礎 TCP 聊天室** (80分基礎)
 - ✅ **多客戶端連線** (+10分)
 - ✅ **多執行緒處理** (+10分)
+- ✅ **圖形使用者介面** (+10分)
 - ✅ **大訊息分割傳輸** (+5分)
 - ✅ **TCP/UDP 混合協議** (+5分)
-- ✅ **圖形使用者介面** (+10分)
 - ✅ **端到端加密通訊** (+5分)
+- ✅ **超時處理機制** (+5分)
+- ✅ **自動重連機制** (+5分)
+- ✅ **多埠號支援** (+5分)
+- ✅ **非阻塞式設計** (+5分)
+- ✅ **P2P 分散式下載** (+20分)
 
-**總分: 125分** 🎉
+**總分: 155分** 🎉
 
 ---
+
+## 功能實作
+
+### Baseline (80分) - Basic TCP or UDP application
+#### 基礎 TCP/UDP 應用程式
+
+#### 🎯 目標
+實作基本的 TCP 或 UDP 應用程式,支援單一客戶端連線的阻塞模式聊天室。
+
+#### 💡 實作原理
+
+**專案結構**:
+```
+base/
+├── client.py          # TCP 客戶端
+├── server.py          # TCP 伺服器
+└── test_large_message.py  # 大訊息測試
+```
+
+**TCP 伺服器實作**:
+```python
+import socket
+
+HOST = "127.0.0.1"
+PORT = 5678
+BUFFER_SIZE = 256
+
+# 建立 TCP socket
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind((HOST, PORT))
+srv.listen(5)
+
+print(f"[server] listening on {HOST}:{PORT} ...")
+
+# 接受單一客戶端連線
+conn, addr = srv.accept()
+print(f"[server] connected by {addr}")
+
+# 簡單的 echo 迴圈
+while True:
+    data = conn.recv(BUFFER_SIZE)
+    if not data:
+        break
+    conn.sendall(data)
+
+conn.close()
+srv.close()
+```
+
+**TCP 客戶端實作**:
+```python
+import socket
+
+HOST = "127.0.0.1"
+PORT = 5678
+BUFFER_SIZE = 256
+
+# 建立 TCP socket 並連線
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect((HOST, PORT))
+
+# 發送訊息並接收回覆
+sock.sendall(b"Hello Server!")
+data = sock.recv(BUFFER_SIZE)
+print(f"Received: {data}")
+
+sock.close()
+```
+
+#### 📊 測試結果
+```bash
+# Terminal 1: 啟動伺服器
+python base/server.py
+
+# Terminal 2: 啟動客戶端
+python base/client.py
+
+# 預期行為:
+✅ TCP 連線建立成功
+✅ 訊息發送和接收正常
+✅ 客戶端斷線時伺服器正確處理
+```
+
+---
+
+### +10 Multi-client connections
+#### 多客戶端連線支援
+
+#### 🎯 目標
+允許多個客戶端同時連接到伺服器,並能互相通訊。
+
+#### 💡 實作原理
+
+**1. 客戶端註冊機制**
+```python
+# hybrid/hybrid_server.py
+clients = {}  # {nickname: {'tcp_conn': socket, 'udp_addr': addr, 'last_heartbeat': time}}
+clients_lock = threading.Lock()
+
+def safe_register(nickname: str, conn: socket.socket) -> str:
+    candidate = nickname or "guest"
+    with clients_lock:
+        base = candidate
+        suffix = 1
+        # 處理暱稱衝突
+        while candidate in clients:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        clients[candidate] = {
+            'tcp_conn': conn,
+            'udp_addr': None,
+            'last_heartbeat': time.time()
+        }
+    return candidate
+```
+
+**2. 廣播訊息機制**
+```python
+def broadcast_tcp(message: str, sender: str | None = None) -> None:
+    """發送訊息給所有客戶端 (排除發送者)"""
+    with clients_lock:
+        targets = [(nick, info['tcp_conn']) for nick, info in clients.items() 
+                   if nick != sender and info['tcp_conn']]
+    
+    for nick, conn in targets:
+        with suppress(OSError):
+            send_encrypted(conn, message, crypto)
+```
+
+#### 📊 測試結果
+```bash
+# 同時啟動 5 個客戶端
+python hybrid/hybrid_client.py Alice --gui
+python hybrid/hybrid_client.py Bob --gui
+python hybrid/hybrid_client.py Charlie --gui
+python hybrid/hybrid_client.py David
+python hybrid/hybrid_client.py Eve
+```
+
+---
+
+### +10 Multi-process or multi-thread
+#### 多執行緒並行處理
+
+#### 🎯 目標
+使用多執行緒讓伺服器能同時處理多個客戶端,不會因為某個客戶端阻塞而影響其他客戶端。
+
+#### 💡 實作原理
+
+**1. 為每個客戶端創建獨立執行緒**
+```python
+def serve_forever(host: str, port: int) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind((host, port))
+        server.listen()
+        
+        while True:
+            conn, address = server.accept()
+            print(f"Connected: {address}")
+            # 為每個客戶端創建獨立執行緒
+            thread = threading.Thread(
+                target=handle_client, 
+                args=(conn, address), 
+                daemon=True  # 主程式結束時自動終止
+            )
+            thread.start()
+```
+
+**2. 客戶端處理函數**
+```python
+def handle_tcp_client(conn: socket.socket, address: tuple[str, int]) -> None:
+    """每個執行緒獨立處理一個客戶端"""
+    nickname = "unknown"
+    registered = False
+    
+    try:
+        # 註冊客戶端
+        send_message(conn, "Enter nickname: ")
+        nickname = recv_message(conn)
+        nickname = safe_register(nickname.strip(), conn)
+        registered = True
+        
+        # 持續接收訊息
+        while True:
+            message = recv_message(conn)
+            if not message:
+                break
+            # 處理訊息...
+            broadcast_tcp(f"{nickname}: {message}\n", sender=nickname)
+    finally:
+        if registered:
+            remove_client(nickname)
+```
+
+#### 📊 效能比較
+
+| 架構 | 並行度 | 阻塞影響 | CPU 使用 |
+|------|--------|----------|----------|
+| 單執行緒 | ❌ 序列處理 | ⚠️ 一個阻塞全部阻塞 | 低 |
+| 多執行緒 | ✅ 並行處理 | ✅ 互不影響 | 中 |
+| 多進程 | ✅ 真正平行 | ✅ 完全隔離 | 高 |
+
+---
+
+### +10 GUI
+#### 圖形使用者介面
+
+#### 🎯 目標
+提供友善的圖形介面,讓使用者能更直覺地使用聊天室。
+
+#### 💡 技術選擇: Tkinter
+
+**為什麼選擇 Tkinter?**
+- ✅ Python 內建,無需額外安裝
+- ✅ 跨平台 (Windows, macOS, Linux)
+- ✅ 輕量級,適合小型應用
+- ✅ 學習曲線平緩
+
+#### 🎨 介面設計
+
+```
+┌─────────────────────────────────────────────────────┐
+│ 聊天室 - Alice                                 [_][□][X]│
+├─────────────────────────────────────────────────────┤
+│  👤 Alice              TCP: ● UDP: ●  💬 Bob 正在輸入... │ ← 頂部資訊列
+├─────────────────────────────────────────────────────┤
+│  💡 TCP=聊天訊息(可靠) | UDP=狀態更新/心跳(快速)        │ ← 說明列
+├─────────────────────────────────────────────────────┤
+│  💬 Bob 正在輸入...                                   │ ← 輸入狀態列
+├─────────────────────────────────────────────────────┤
+│  [系統] Alice joined the chat.                       │
+│  [14:30:15] Bob: Hello!                              │ ← 聊天訊息區
+│  [14:30:20] Alice (you): Hi Bob!                     │   (可滾動)
+│  [14:30:25] Charlie: Hey everyone!                   │
+│                                                     │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│ 輸入訊息...                              ┌─────────┐│
+│                                          │  發送   ││ ← 輸入區
+│ (Enter=發送 | Shift+Enter=換行)          │ (Enter) ││
+└─────────────────────────────────────────┴─────────┘┘
+```
+
+#### 🔧 關鍵實作
+
+**1. 多執行緒架構 (避免 GUI 凍結)**
+```python
+class HybridChatGUI:
+    def __init__(self):
+        self.tcp_queue = queue.Queue()  # TCP 訊息佇列
+        self.udp_queue = queue.Queue()  # UDP 訊息佇列
+        
+    def start(self):
+        # 啟動背景執行緒接收訊息
+        threading.Thread(target=tcp_receiver_loop, 
+                        args=(self.tcp_sock, self.stop_event, self.tcp_queue.put), 
+                        daemon=True).start()
+        
+        # 主執行緒定期檢查佇列
+        self.root.after(100, self.process_queues)
+        self.root.mainloop()
+```
+
+---
+
+### +5 Message split
+#### 訊息分割與重組
+
+#### 🎯 目標
+當訊息超過 buffer size 時,能完整傳輸而不會被截斷。
+
+#### 💡 實作原理
+
+**長度前綴協議 (Length-Prefix Protocol)**
+
+#### 📦 訊息格式
+```
+┌──────────────┬────────────────────────────────┐
+│   4 bytes    │        N bytes                 │
+│   Length     │        Message Content         │
+│   (big-endian)│                                │
+└──────────────┴────────────────────────────────┘
+```
+
+#### 🔧 實作細節
+
+**1. 發送端**
+```python
+import struct
+
+def send_message(sock: socket.socket, message: str) -> None:
+    """使用長度前綴協議發送完整訊息"""
+    data = message.encode(ENCODING)
+    length = len(data)
+    
+    # 步驟 1: 發送 4 bytes 的長度資訊
+    sock.sendall(struct.pack('>I', length))  # '>I' = big-endian unsigned int
+    
+    # 步驟 2: 分塊發送訊息內容
+    sent = 0
+    while sent < length:
+        chunk = data[sent:sent + BUFFER_SIZE]
+        sock.sendall(chunk)
+        sent += len(chunk)
+```
+
+**2. 接收端**
+```python
+def recv_message(sock: socket.socket) -> str | None:
+    """使用長度前綴協議接收完整訊息"""
+    try:
+        # 步驟 1: 接收 4 bytes 的長度資訊
+        length_data = b''
+        while len(length_data) < 4:
+            chunk = sock.recv(4 - len(length_data))
+            if not chunk:
+                return None
+            length_data += chunk
+        
+        length = struct.unpack('>I', length_data)[0]
+        
+        # 步驟 2: 根據長度接收完整訊息
+        data = b''
+        while len(data) < length:
+            chunk = sock.recv(min(BUFFER_SIZE, length - len(data)))
+            if not chunk:
+                return None
+            data += chunk
+        
+        return data.decode(ENCODING, errors='ignore')
+    except OSError:
+        return None
+```
+
+---
+
+### +5 Use both UDP & TCP and Explain why?
+#### TCP/UDP 混合協議
+
+#### 🎯 目標
+結合 TCP 的可靠性和 UDP 的即時性,打造更完善的通訊系統。
+
+#### 📊 TCP vs UDP 比較表
+
+| 特性 | TCP | UDP | 適用場景 |
+|------|-----|-----|----------|
+| **可靠性** | ✅ 保證送達 | ❌ 可能丟包 | TCP: 聊天訊息<br>UDP: 狀態更新 |
+| **順序性** | ✅ 保證順序 | ❌ 可能亂序 | TCP: 重要訊息<br>UDP: 即時狀態 |
+| **連線** | ✅ 需建立連線 | ❌ 無連線 | TCP: 長連線<br>UDP: 簡短通訊 |
+| **速度** | 🐌 較慢 (確認機制) | 🚀 快速 (無確認) | TCP: 文字訊息<br>UDP: 語音/視訊 |
+| **開銷** | 📦 大 (標頭 20+ bytes) | 📦 小 (標頭 8 bytes) | TCP: 大檔案<br>UDP: 控制訊號 |
+
+#### 🏗️ 混合架構設計
+
+```
+客戶端                     伺服器
+┌──────────┐              ┌──────────┐
+│          │──TCP 5678───→│          │  聊天訊息 (可靠)
+│  Alice   │←─TCP 5678────│  Server  │  用戶加入/離開
+│          │              │          │  指令 (/users)
+│          │──UDP 5679───→│          │  心跳包 (HEARTBEAT)
+│          │←─UDP 5679────│          │  正在輸入 (TYPING)
+└──────────┘              └──────────┘  狀態更新 (快速)
+```
+
+#### 📡 通訊協議設計
+
+**TCP 協議 (Port 5678)** - 聊天訊息、系統通知
+**UDP 協議 (Port 5679)** - 狀態更新、心跳包
+
+#### 🎯 設計決策
+
+| 功能 | 選擇 | 原因 |
+|------|------|------|
+| 聊天訊息 | TCP | 必須保證完整送達,順序正確 |
+| 用戶加入/離開 | TCP | 重要通知,不能丟失 |
+| 心跳包 | UDP | 快速檢測,偶爾丟包無影響 |
+| 正在輸入 | UDP | 即時狀態,丟包可接受 |
+
+### +5 Time out handling
+#### 超時處理機制
+
+#### 🎯 目標
+處理閒置連線,避免資源被耗盡。
+
+#### 💡 實作原理
+
+**心跳機制 (Heartbeat)**:
+- 客戶端每 5 秒發送心跳包
+- 伺服器檢查 30 秒內無心跳的連線
+- 自動移除超時客戶端
+
+#### 🔧 實作細節
+
+**1. 心跳發送 (客戶端)**
+```python
+def heartbeat_loop(sock: socket.socket, nickname: str, stop_event: threading.Event):
+    """定期發送心跳包"""
+    while not stop_event.is_set():
+        try:
+            # 發送 UDP 心跳包
+            heartbeat_msg = f"HEARTBEAT|{nickname}"
+            sock.sendto(heartbeat_msg.encode(), (HOST, UDP_PORT))
+        except OSError:
+            break
+        time.sleep(5)  # 每 5 秒發送一次
+```
+
+**2. 超時檢查 (伺服器)**
+```python
+def check_timeouts():
+    """檢查超時的客戶端連線"""
+    while True:
+        time.sleep(10)  # 每 10 秒檢查一次
+        
+        current_time = time.time()
+        timeout_clients = []
+        
+        with clients_lock:
+            for nickname, info in clients.items():
+                if current_time - info['last_heartbeat'] > 30:  # 30 秒超時
+                    timeout_clients.append(nickname)
+        
+        # 移除超時客戶端
+        for nickname in timeout_clients:
+            print(f"⏰ 客戶端 {nickname} 超時,自動移除")
+            remove_client(nickname)
+```
+
+#### 📊 測試結果
+```bash
+# Terminal 1: 啟動伺服器
+python timeout/timeout_server.py
+
+# Terminal 2: 啟動客戶端
+python timeout/timeout_client.py Alice
+
+# 測試步驟:
+1. 觀察心跳包發送 (每 5 秒)
+2. 強制中斷網路連線
+3. 等待 30 秒,觀察自動移除
+```
+
+---
+
+### +5 Disconnection handling & Auto Reconnection handling
+#### 斷線處理與自動重連
+
+#### 🎯 目標
+當連線中斷時,能夠自動重新連線而不需重新啟動程式。
+
+#### 💡 實作原理
+
+**自動重連機制**:
+- 檢測連線中斷
+- 指數退避重連策略
+- 狀態恢復
+
+#### 🔧 實作細節
+
+**1. 連線監控**
+```python
+def monitor_connection(sock: socket.socket, stop_event: threading.Event):
+    """監控 TCP 連線狀態"""
+    while not stop_event.is_set():
+        try:
+            # 發送 keep-alive 訊息
+            sock.sendall(b"PING")
+            time.sleep(10)
+        except OSError:
+            # 連線中斷,觸發重連
+            trigger_reconnection()
+            break
+```
+
+**2. 自動重連**
+```python
+def auto_reconnect():
+    """自動重連邏輯"""
+    retry_count = 0
+    max_retries = 10
+    
+    while retry_count < max_retries:
+        try:
+            # 指數退避: 1s, 2s, 4s, 8s...
+            delay = min(2 ** retry_count, 30)  # 最大 30 秒
+            print(f"🔄 嘗試重連中... ({retry_count + 1}/{max_retries})")
+            time.sleep(delay)
+            
+            # 重新建立連線
+            new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            new_sock.connect((HOST, TCP_PORT))
+            
+            # 重新註冊
+            send_message(new_sock, nickname)
+            
+            print("✅ 重連成功!")
+            return new_sock
+            
+        except OSError:
+            retry_count += 1
+    
+    print("❌ 重連失敗,請檢查網路連線")
+    return None
+```
+
+#### 📁 專案結構
+```
+reconnection/
+├── reconnection_client.py    # 自動重連客戶端
+├── reconnection_server.py   # 支援重連的伺服器
+├── RECONNECTION_FEATURES.md  # 重連功能說明
+└── __pycache__/
+```
+
+---
+
+### +5 Multi Port Listing
+#### 多埠號支援
+
+#### 🎯 目標
+為不同的連線需求提供不同的埠號來處理不同的功能。
+
+#### 💡 實作原理
+
+**多埠號架構**:
+- TCP 5678: 聊天訊息
+- UDP 5679: 狀態更新
+- TCP 5680: 檔案傳輸
+- UDP 5681: 語音資料
+
+#### 🔧 實作細節
+
+**1. 埠號配置**
+```python
+# multi_port/multi_port_server.py
+PORTS = {
+    'chat': {'tcp': 5678, 'udp': 5679},      # 聊天功能
+    'file': {'tcp': 5680},                   # 檔案傳輸
+    'voice': {'udp': 5681},                  # 語音通訊
+    'video': {'udp': 5682}                   # 視訊通訊
+}
+```
+
+**2. 多 Socket 監聽**
+```python
+def start_multi_port_server():
+    """啟動多埠號伺服器"""
+    servers = {}
+    
+    # 建立各功能 Socket
+    for service, ports in PORTS.items():
+        if 'tcp' in ports:
+            tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp_sock.bind((HOST, ports['tcp']))
+            tcp_sock.listen(5)
+            servers[f"{service}_tcp"] = tcp_sock
+            
+        if 'udp' in ports:
+            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_sock.bind((HOST, ports['udp']))
+            servers[f"{service}_udp"] = udp_sock
+    
+    # 啟動各服務處理執行緒
+    for name, sock in servers.items():
+        if name.endswith('_tcp'):
+            threading.Thread(target=handle_tcp_service, args=(sock, name), daemon=True).start()
+        else:
+            threading.Thread(target=handle_udp_service, args=(sock, name), daemon=True).start()
+```
+
+#### 📁 專案結構
+```
+multi_port/
+├── crypto_utils.py
+├── multi_port_client.py
+├── multi_port_server.py
+└── README.md
+```
+
+---
+
+### +5 Nonblocking and explain why
+#### 非阻塞式設計
+
+#### 🎯 目標
+讓系統在處理多用戶或龐大訊息時,其他功能不會被卡住。
+
+#### 💡 實作原理
+
+**非阻塞 I/O**:
+- 使用 select() 或 asyncio 進行非阻塞操作
+- 多執行緒處理不同任務
+- 訊息佇列解耦處理
+
+#### 🔧 實作細節
+
+**1. 非阻塞 Socket**
+```python
+# nonblocking/nonblocking_server.py
+def set_nonblocking(sock: socket.socket):
+    """設定 socket 為非阻塞模式"""
+    sock.setblocking(False)
+
+def handle_nonblocking_server():
+    """非阻塞伺服器主迴圈"""
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.bind((HOST, PORT))
+    server_sock.listen(5)
+    set_nonblocking(server_sock)
+    
+    clients = []  # 已連線的客戶端
+    message_queues = {}  # {sock: queue}
+    
+    while True:
+        # 使用 select 監控所有 socket
+        readable, writable, exceptional = select.select(
+            [server_sock] + clients,  # 可讀 socket
+            clients,                   # 可寫 socket
+            clients,                   # 異常 socket
+            0.1                        # 超時時間
+        )
+        
+        # 處理新連線
+        if server_sock in readable:
+            conn, addr = server_sock.accept()
+            set_nonblocking(conn)
+            clients.append(conn)
+            message_queues[conn] = queue.Queue()
+        
+        # 處理客戶端訊息...
+```
+
+**2. 為什麼需要非阻塞?**
+
+**問題場景**:
+```python
+# ❌ 阻塞模式問題
+def blocking_server():
+    while True:
+        conn, addr = server.accept()  # 阻塞等待連線
+        
+        while True:
+            data = conn.recv(1024)  # 阻塞等待資料
+            if not data:
+                break
+            # 處理資料 (可能很慢)
+            process_data(data)  # 如果這裡很慢,其他客戶端會卡住!
+```
+
+**解決方案**:
+```python
+# ✅ 非阻塞模式解決
+def nonblocking_server():
+    while True:
+        # select() 同時監控所有 socket
+        readable, writable, exceptional = select.select(
+            all_sockets, [], [], 0.1
+        )
+        
+        for sock in readable:
+            if sock is server_sock:
+                # 新連線,立即處理
+                conn, addr = server_sock.accept()
+                clients.append(conn)
+            else:
+                # 客戶端資料,立即處理
+                data = sock.recv(1024)
+                # 快速處理或放入佇列交給其他執行緒處理
+```
+
+#### 📊 效能比較
+
+| 模式 | 處理方式 | 優點 | 缺點 |
+|------|----------|------|------|
+| 阻塞 | 序列處理 | 簡單 | 多用戶時卡住 |
+| 非阻塞 | 並行處理 | 高效 | 複雜 |
+| 多執行緒 | 並行處理 | 直覺 | 資源消耗高 |
+
+---
+
+### +20 P2P
+#### 分散式下載系統
+
+#### 🎯 目標
+實作基於 P2P 的分散式檔案下載功能。
+
+#### 💡 實作原理
+
+**P2P 架構**:
+- **Tracker**: 協調檔案分享和下載
+- **Peer Server**: 提供檔案片段給其他 Peer
+- **P2P Client**: 從多個來源並行下載
+
+#### 🔧 實作細節
+
+**1. 檔案切片**
+```python
+def split_file_into_chunks(filepath: str) -> tuple[list[dict], str]:
+    """將檔案切成多個片段"""
+    chunks = []
+    file_data = b''
+    
+    with open(filepath, 'rb') as f:
+        chunk_id = 0
+        while True:
+            data = f.read(P2P_CHUNK_SIZE)  # 64KB
+            if not data:
+                break
+            file_data += data
+            chunks.append({
+                'id': chunk_id,
+                'data': data,
+                'hash': hashlib.sha256(data).hexdigest()
+            })
+            chunk_id += 1
+    
+    file_hash = hashlib.sha256(file_data).hexdigest()
+    return chunks, file_hash
+```
+
+**2. 分散式下載**
+```python
+def download_file(self, filename: str, file_info: dict) -> bool:
+    """從多個 Peer 下載檔案"""
+    total_chunks = file_info['chunks']
+    peers = file_info['peers']
+    
+    # 分配片段給不同的 Peer
+    chunks_per_peer = total_chunks // len(peers)
+    result_chunks = {}
+    threads = []
+    
+    for i, peer in enumerate(peers):
+        start_chunk = i * chunks_per_peer
+        end_chunk = start_chunk + chunks_per_peer if i < len(peers) - 1 else total_chunks
+        chunk_ids = list(range(start_chunk, end_chunk))
+        
+        thread = threading.Thread(
+            target=self.download_from_peer,
+            args=(peer, filename, chunk_ids, result_chunks),
+            daemon=True
+        )
+        threads.append(thread)
+        thread.start()
+    
+    # 等待所有下載完成
+    for thread in threads:
+        thread.join()
+    
+    # 檢查是否所有片段都下載成功
+    if len(result_chunks) == total_chunks:
+        # 合併片段
+        ordered_chunks = [result_chunks[i] for i in range(total_chunks)]
+        output_path = DOWNLOADS_DIR / filename
+        
+        if merge_chunks_to_file(ordered_chunks, str(output_path)):
+            print(f"✅ 下載完成: {output_path}")
+            
+            # 添加到本地 Peer Server (成為 Seeder)
+            chunks_with_hash = [
+                {
+                    'id': i,
+                    'data': chunk,
+                    'hash': hashlib.sha256(chunk).hexdigest()
+                }
+                for i, chunk in enumerate(ordered_chunks)
+            ]
+            self.peer_server.add_file(filename, chunks_with_hash, file_info['hash'])
+            
+            # 通知 Tracker 我也有這個檔案了
+            self.share_file(str(output_path))
+            
+            return True
+        else:
+            print("❌ 合併片段失敗")
+            return False
+    else:
+        print(f"❌ 下載不完整: {len(result_chunks)}/{total_chunks} 片段")
+        return False
+```
+
+#### 📁 專案結構
+```
+p2p/
+├── crypto_utils.py
+├── p2p_client.py       # P2P 客戶端 (完整 GUI)
+├── p2p_server.py      # P2P Tracker 伺服器
+├── README.md
+├── TEST_GUIDE.md
+├── __pycache__/
+└── downloads/          # 下載目錄
+```
+
+---
+
+### +5 Time out handling
+#### 超時處理機制
+
+#### 🎯 目標
+處理閒置連線,避免資源被耗盡。
+
+#### 💡 實作原理
+
+**心跳機制 (Heartbeat)**:
+- 客戶端每 5 秒發送心跳包
+- 伺服器檢查 30 秒內無心跳的連線
+- 自動移除超時客戶端
+
+#### 🔧 實作細節
+
+**1. 心跳發送 (客戶端)**
+```python
+def heartbeat_loop(sock: socket.socket, nickname: str, stop_event: threading.Event):
+    """定期發送心跳包"""
+    while not stop_event.is_set():
+        try:
+            # 發送 UDP 心跳包
+            heartbeat_msg = f"HEARTBEAT|{nickname}"
+            sock.sendto(heartbeat_msg.encode(), (HOST, UDP_PORT))
+        except OSError:
+            break
+        time.sleep(5)  # 每 5 秒發送一次
+```
+
+**2. 超時檢查 (伺服器)**
+```python
+def check_timeouts():
+    """檢查超時的客戶端連線"""
+    while True:
+        time.sleep(10)  # 每 10 秒檢查一次
+        
+        current_time = time.time()
+        timeout_clients = []
+        
+        with clients_lock:
+            for nickname, info in clients.items():
+                if current_time - info['last_heartbeat'] > 30:  # 30 秒超時
+                    timeout_clients.append(nickname)
+        
+        # 移除超時客戶端
+        for nickname in timeout_clients:
+            print(f"⏰ 客戶端 {nickname} 超時,自動移除")
+            remove_client(nickname)
+```
+
+#### 📊 測試結果
+```bash
+# Terminal 1: 啟動伺服器
+python timeout/timeout_server.py
+
+# Terminal 2: 啟動客戶端
+python timeout/timeout_client.py Alice
+
+# 測試步驟:
+1. 觀察心跳包發送 (每 5 秒)
+2. 強制中斷網路連線
+3. 等待 30 秒,觀察自動移除
+```
+
+---
+
+### +5 Disconnection handling & Auto Reconnection handling
+#### 斷線處理與自動重連
+
+#### 🎯 目標
+當連線中斷時,能夠自動重新連線而不需重新啟動程式。
+
+#### 💡 實作原理
+
+**自動重連機制**:
+- 檢測連線中斷
+- 指數退避重連策略
+- 狀態恢復
+
+#### 🔧 實作細節
+
+**1. 連線監控**
+```python
+def monitor_connection(sock: socket.socket, stop_event: threading.Event):
+    """監控 TCP 連線狀態"""
+    while not stop_event.is_set():
+        try:
+            # 發送 keep-alive 訊息
+            sock.sendall(b"PING")
+            time.sleep(10)
+        except OSError:
+            # 連線中斷,觸發重連
+            trigger_reconnection()
+            break
+```
+
+**2. 自動重連**
+```python
+def auto_reconnect():
+    """自動重連邏輯"""
+    retry_count = 0
+    max_retries = 10
+    
+    while retry_count < max_retries:
+        try:
+            # 指數退避: 1s, 2s, 4s, 8s...
+            delay = min(2 ** retry_count, 30)  # 最大 30 秒
+            print(f"🔄 嘗試重連中... ({retry_count + 1}/{max_retries})")
+            time.sleep(delay)
+            
+            # 重新建立連線
+            new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            new_sock.connect((HOST, TCP_PORT))
+            
+            # 重新註冊
+            send_message(new_sock, nickname)
+            
+            print("✅ 重連成功!")
+            return new_sock
+            
+        except OSError:
+            retry_count += 1
+    
+    print("❌ 重連失敗,請檢查網路連線")
+    return None
+```
+
+#### 📁 專案結構
+```
+reconnection/
+├── reconnection_client.py    # 自動重連客戶端
+├── reconnection_server.py   # 支援重連的伺服器
+├── RECONNECTION_FEATURES.md  # 重連功能說明
+└── __pycache__/
+```
+
+---
+
+### +5 Multi Port Listing
+#### 多埠號支援
+
+#### 🎯 目標
+為不同的連線需求提供不同的埠號來處理不同的功能。
+
+#### 💡 實作原理
+
+**多埠號架構**:
+- TCP 5678: 聊天訊息
+- UDP 5679: 狀態更新
+- TCP 5680: 檔案傳輸
+- UDP 5681: 語音資料
+
+#### 🔧 實作細節
+
+**1. 埠號配置**
+```python
+# multi_port/multi_port_server.py
+PORTS = {
+    'chat': {'tcp': 5678, 'udp': 5679},      # 聊天功能
+    'file': {'tcp': 5680},                   # 檔案傳輸
+    'voice': {'udp': 5681},                  # 語音通訊
+    'video': {'udp': 5682}                   # 視訊通訊
+}
+```
+
+**2. 多 Socket 監聽**
+```python
+def start_multi_port_server():
+    """啟動多埠號伺服器"""
+    servers = {}
+    
+    # 建立各功能 Socket
+    for service, ports in PORTS.items():
+        if 'tcp' in ports:
+            tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp_sock.bind((HOST, ports['tcp']))
+            tcp_sock.listen(5)
+            servers[f"{service}_tcp"] = tcp_sock
+            
+        if 'udp' in ports:
+            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_sock.bind((HOST, ports['udp']))
+            servers[f"{service}_udp"] = udp_sock
+    
+    # 啟動各服務處理執行緒
+    for name, sock in servers.items():
+        if name.endswith('_tcp'):
+            threading.Thread(target=handle_tcp_service, args=(sock, name), daemon=True).start()
+        else:
+            threading.Thread(target=handle_udp_service, args=(sock, name), daemon=True).start()
+```
+
+#### 📁 專案結構
+```
+multi_port/
+├── crypto_utils.py
+├── multi_port_client.py
+├── multi_port_server.py
+└── README.md
+```
+
+---
+
+### +5 Nonblocking and explain why
+#### 非阻塞式設計
+
+#### 🎯 目標
+讓系統在處理多用戶或龐大訊息時,其他功能不會被卡住。
+
+#### 💡 實作原理
+
+**非阻塞 I/O**:
+- 使用 select() 或 asyncio 進行非阻塞操作
+- 多執行緒處理不同任務
+- 訊息佇列解耦處理
+
+#### 🔧 實作細節
+
+**1. 非阻塞 Socket**
+```python
+# nonblocking/nonblocking_server.py
+def set_nonblocking(sock: socket.socket):
+    """設定 socket 為非阻塞模式"""
+    sock.setblocking(False)
+
+def handle_nonblocking_server():
+    """非阻塞伺服器主迴圈"""
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.bind((HOST, PORT))
+    server_sock.listen(5)
+    set_nonblocking(server_sock)
+    
+    clients = []  # 已連線的客戶端
+    message_queues = {}  # {sock: queue}
+    
+    while True:
+        # 使用 select 監控所有 socket
+        readable, writable, exceptional = select.select(
+            [server_sock] + clients,  # 可讀 socket
+            clients,                   # 可寫 socket
+            clients,                   # 異常 socket
+            0.1                        # 超時時間
+        )
+        
+        # 處理新連線
+        if server_sock in readable:
+            conn, addr = server_sock.accept()
+            set_nonblocking(conn)
+            clients.append(conn)
+            message_queues[conn] = queue.Queue()
+        
+        # 處理客戶端訊息...
+```
+
+**2. 為什麼需要非阻塞?**
+
+**問題場景**:
+```python
+# ❌ 阻塞模式問題
+def blocking_server():
+    while True:
+        conn, addr = server.accept()  # 阻塞等待連線
+        
+        while True:
+            data = conn.recv(1024)  # 阻塞等待資料
+            if not data:
+                break
+            # 處理資料 (可能很慢)
+            process_data(data)  # 如果這裡很慢,其他客戶端會卡住!
+```
+
+**解決方案**:
+```python
+# ✅ 非阻塞模式解決
+def nonblocking_server():
+    while True:
+        # select() 同時監控所有 socket
+        readable, writable, exceptional = select.select(
+            all_sockets, [], [], 0.1
+        )
+        
+        for sock in readable:
+            if sock is server_sock:
+                # 新連線,立即處理
+                conn, addr = server_sock.accept()
+                clients.append(conn)
+            else:
+                # 客戶端資料,立即處理
+                data = sock.recv(1024)
+                # 快速處理或放入佇列交給其他執行緒處理
+```
+
+#### 📊 效能比較
+
+| 模式 | 處理方式 | 優點 | 缺點 |
+|------|----------|------|------|
+| 阻塞 | 序列處理 | 簡單 | 多用戶時卡住 |
+| 非阻塞 | 並行處理 | 高效 | 複雜 |
+| 多執行緒 | 並行處理 | 直覺 | 資源消耗高 |
+
+---
+
+### +20 P2P
+#### 分散式下載系統
+
+#### 🎯 目標
+實作基於 P2P 的分散式檔案下載功能。
+
+#### 💡 實作原理
+
+**P2P 架構**:
+- **Tracker**: 協調檔案分享和下載
+- **Peer Server**: 提供檔案片段給其他 Peer
+- **P2P Client**: 從多個來源並行下載
+
+#### 🔧 實作細節
+
+**1. 檔案切片**
+```python
+def split_file_into_chunks(filepath: str) -> tuple[list[dict], str]:
+    """將檔案切成多個片段"""
+    chunks = []
+    file_data = b''
+    
+    with open(filepath, 'rb') as f:
+        chunk_id = 0
+        while True:
+            data = f.read(P2P_CHUNK_SIZE)  # 64KB
+            if not data:
+                break
+            file_data += data
+            chunks.append({
+                'id': chunk_id,
+                'data': data,
+                'hash': hashlib.sha256(data).hexdigest()
+            })
+            chunk_id += 1
+    
+    file_hash = hashlib.sha256(file_data).hexdigest()
+    return chunks, file_hash
+```
+
+**2. 分散式下載**
+```python
+def download_file(self, filename: str, file_info: dict) -> bool:
+    """從多個 Peer 下載檔案"""
+    total_chunks = file_info['chunks']
+    peers = file_info['peers']
+    
+    # 分配片段給不同的 Peer
+    chunks_per_peer = total_chunks // len(peers)
+    result_chunks = {}
+    threads = []
+    
+    for i, peer in enumerate(peers):
+        start_chunk = i * chunks_per_peer
+        end_chunk = start_chunk + chunks_per_peer if i < len(peers) - 1 else total_chunks
+        chunk_ids = list(range(start_chunk, end_chunk))
+        
+        thread = threading.Thread(
+            target=self.download_from_peer,
+            args=(peer, filename, chunk_ids, result_chunks),
+            daemon=True
+        )
+        threads.append(thread)
+        thread.start()
+    
+    # 等待所有下載完成
+    for thread in threads:
+        thread.join()
+    
+    # 合併片段
+    if len(result_chunks) == total_chunks:
+        ordered_chunks = [result_chunks[i] for i in range(total_chunks)]
+        merge_chunks_to_file(ordered_chunks, output_path)
+        return True
+    
+    return False
+```
+
+#### 📁 專案結構
+```
+p2p/
+├── crypto_utils.py
+├── p2p_client.py       # P2P 客戶端 (完整 GUI)
+├── p2p_server.py      # P2P Tracker 伺服器
+├── README.md
+├── TEST_GUIDE.md
+├── __pycache__/
+└── downloads/          # 下載目錄
+```
+
+---
+
+## 架構設計
+
+### 整體架構圖
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     聊天室系統架構                         │
+└─────────────────────────────────────────────────────────┘
+
+┌──────────────────────────┐         ┌──────────────────────────┐
+│      伺服器端 (Server)    │         │     客戶端 (Client)        │
+├──────────────────────────┤         ├──────────────────────────┤
+│                          │         │                          │
+│ ┌──────────────────────┐│         │ ┌──────────────────────┐│
+│ │  TCP Server          ││◄────────┤►│  TCP Socket          ││
+│ │  Port: 5678          ││  聊天    │ │                      ││
+│ │  - 接受連線          ││  訊息    │ │  - 發送/接收訊息     ││
+│ │  - 為每個客戶端      ││         │ │  - 長度前綴協議       ││
+│ │    創建執行緒        ││         │ └──────────────────────┘│
+│ └──────────────────────┘│         │                          │
+│                          │         │ ┌──────────────────────┐│
+│ ┌──────────────────────┐│         │ │  UDP Socket          ││
+│ │  UDP Server          ││◄────────┤►│                      ││
+│ │  Port: 5679          ││  狀態    │ │  - 心跳包            ││
+│ │  - 接收心跳包        ││  更新    │ │  - 正在輸入狀態      ││
+│ │  - 接收狀態更新      ││         │ └──────────────────────┘│
+│ └──────────────────────┘│         │                          │
+│                          │         │ ┌──────────────────────┐│
+│ ┌──────────────────────┐│         │ │  GUI (Tkinter)       ││
+│ │  客戶端管理          ││         │ │  - 訊息顯示區        ││
+│ │  {nickname: info}    ││         │ │  - 輸入區            ││
+│ │  - TCP 連線          ││         │ │  - 狀態列            ││
+│ │  - UDP 位址          ││         │ └──────────────────────┘│
+│ │  - 最後心跳時間      ││         │                          │
+│ └──────────────────────┘│         │ ┌──────────────────────┐│
+│                          │         │ │  執行緒管理          ││
+│ ┌──────────────────────┐│         │ │  - TCP 接收執行緒    ││
+│ │  執行緒管理          ││         │ │  - UDP 接收執行緒    ││
+│ │  - 客戶端處理執行緒  ││         │ │  - 心跳發送執行緒    ││
+│ │  - UDP 處理執行緒    ││         │ │  - GUI 主執行緒      ││
+│ └──────────────────────┘│         │ └──────────────────────┘│
+└──────────────────────────┘         └──────────────────────────┘
+```
+
+---
+
+## 測試方法
+
+### 基礎功能測試
+
+#### 1. 單客戶端連線測試
+```bash
+# Terminal 1: 啟動伺服器
+python base/server.py
+
+# Terminal 2: 啟動客戶端
+python base/client.py
+
+# 預期結果:
+✅ TCP 連線成功
+✅ 能發送和接收訊息
+✅ /quit 能正常離開
+```
+
+#### 2. 多客戶端測試
+```bash
+# Terminal 1: 伺服器
+python hybrid/hybrid_server.py
+
+# Terminal 2-5: 客戶端
+python hybrid/hybrid_client.py Alice --gui
+python hybrid/hybrid_client.py Bob --gui
+python hybrid/hybrid_client.py Charlie
+python hybrid/hybrid_client.py David
+
+# 測試項目:
+✅ 4 個客戶端同時連線
+✅ 訊息廣播正確
+✅ 暱稱衝突處理
+✅ 系統訊息廣播
+```
+
+### 進階功能測試
+
+#### 3. P2P 分散式下載測試
+```bash
+# Terminal 1: 啟動 P2P Tracker
+python p2p/p2p_server.py
+
+# Terminal 2: Alice 分享檔案
+python p2p/p2p_client.py Alice --gui
+# 在 GUI 中選擇檔案分享
+
+# Terminal 3: Bob 下載檔案
+python p2p/p2p_client.py Bob --gui
+# 在 GUI 中搜尋並下載檔案
+
+# 預期結果:
+✅ 檔案成功分享到 P2P 網路
+✅ 多個來源並行下載
+✅ SHA256 完整性驗證
+✅ 下載完成後自動成為 Seeder
+```
+
+---
+
+## 📝 總結
+
+### 技術亮點
+
+| 功能 | 技術 | 難度 | 價值 |
+|------|------|------|------|
+| **多客戶端連線** | Dict + Lock | ⭐⭐⭐ | ⭐⭐⭐⭐ |
+| **多執行緒** | Threading + Daemon | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **訊息分割** | 長度前綴協議 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| **UDP/TCP 混合** | 雙 Socket + 協議設計 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **端到端加密** | RSA + AES + HMAC | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **P2P 分散式下載** | 分塊 + 多來源下載 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐⭐ |
+
+### 學習成果
+
+通過本專案,您已經掌握:
+✅ Socket 程式設計 (TCP/UDP)
+✅ 多執行緒程式設計
+✅ 網路協議設計
+✅ GUI 開發
+✅ 錯誤處理與例外管理
+✅ 並發控制 (Lock, Queue, Event)
+✅ 跨執行緒通訊
+✅ 加密技術 (RSA + AES + HMAC)
+✅ P2P 網路架構
+
+### 可能的改進方向
+
+1. **安全性**
+   - ✅ 訊息加密 (RSA-2048 + AES-256-CBC + HMAC-SHA256) ← **已實作**
+   - ✅ 防重放攻擊 (Timestamp + Nonce) ← **已實作**
+   - 使用者認證機制
+   - TLS/SSL 憑證驗證
+
+2. **功能擴充**
+   - 私訊功能
+   - 檔案傳輸
+   - 群組聊天室
+   - 聊天記錄儲存
+
+3. **效能優化**
+   - 使用 asyncio 非同步 I/O
+   - 訊息壓縮
+   - 連線池管理
+
+4. **部署**
+   - Docker 容器化
+   - 雲端部署 (AWS/Azure)
+   - 負載平衡
+
+---
+
+**作者**: Socket Programming Team  
+**日期**: 2024-11-11  
+**版本**: 3.0  
+**總分**: 155/100 🎉 (含所有進階功能)
+
 
 ## 功能實作
 
