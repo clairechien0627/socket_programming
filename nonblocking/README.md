@@ -1,190 +1,114 @@
-# Nonblocking 聊天室# 多埠口聊天室 (Multi-Port Chat System)
+# 多埠口聊天室 (Multi-Port Chat System)
 
+## 📋 專案說明
 
+這是一個展示**多埠口架構 (Multi-Port Architecture)** 的安全聊天室應用程式。不同的功能使用不同的網路埠口，實現功能隔離和效能優化。
 
-## 🎯 +5 Nonblocking 說明## 📋 專案說明
+### 問題
+你的系統是否能做到 Nonblocking，在處理多用戶或龐大的 message 時，其他功能會不會被卡住？
 
-
-
-### 問題這是一個展示**多埠口架構 (Multi-Port Architecture)** 的安全聊天室應用程式。
-
-你的系統是否能做到 Nonblocking，在處理多用戶或龐大的 message 時，其他功能會不會被卡住?不同的功能使用不同的網路埠口,實現功能隔離和效能優化。
-
-
-
-### 答案## 🎯 加分項目
-
+### 答案
 ✅ **可以！** 本系統使用多種技術實現 nonblocking。
 
 本專案完成以下作業要求:
 
----
-
 ### ✅ +5 Multi Port Listing（Different Port for Different Method）
 
-## 💡 Nonblocking 實作- **TCP 6678**: 聊天訊息傳輸 (加密)
+## 💡 Nonblocking 實作
 
-- **UDP 6679**: 狀態更新 (心跳、輸入狀態)
-
-### 1. 多執行緒架構- **TCP 6680**: 檔案傳輸 (獨立埠口)
-
+### 1. 多執行緒架構
 ```
-
-伺服器:## 🏗️ 架構設計
-
+伺服器:
 ├─ Thread-1: 處理 Alice
-
-├─ Thread-2: 處理 Bob### 為什麼需要多埠口？
-
+├─ Thread-2: 處理 Bob
 └─ Thread-3: 處理 Charlie
 
+✅ Alice 發訊息不會卡住 Bob
+✅ 100 個用戶可以同時聊天
+```
+
+### 2. 多埠口分離
+
 #### 問題場景
-
-✅ Alice 發訊息不會卡住 Bob```
-
-✅ 100 個用戶可以同時聊天單埠口架構:
-
-```Alice 正在傳送 100MB 檔案
-
+單埠口架構:
+```
+Alice 正在傳送 100MB 檔案
 → TCP 6678 被阻塞
+→ Bob 的聊天訊息要等很久 ❌
+```
 
-### 2. 多埠口分離→ Bob 的聊天訊息要等很久 ❌
-
-``````
-
-TCP 6678: 聊天訊息
-
-UDP 6679: 狀態更新#### 解決方案
-
-TCP 6680: 檔案傳輸```
-
+#### 解決方案
 多埠口架構:
+```
+TCP 6678: 聊天訊息
+UDP 6679: 狀態更新
+TCP 6680: 檔案傳輸
 
-✅ 檔案傳輸不阻塞聊天Alice 用 TCP 6680 傳檔案
-
-✅ 功能完全隔離Bob 用 TCP 6678 聊天
-
-```→ 兩者互不影響 ✅
-
+Alice 用 TCP 6680 傳檔案
+Bob 用 TCP 6678 聊天
+→ 兩者互不影響 ✅
 ```
 
 ### 3. GUI 非同步設計
-
-```### 埠口分配
-
+```
 Thread-1: 接收訊息 (background)
+Thread-2: GUI 主執行緒 (用戶操作)
 
-Thread-2: GUI 主執行緒 (用戶操作)| Port | 協定 | 功能 | 原因 |
-
-|------|------|------|------|
-
-✅ 接收訊息時用戶還能輸入| **6678** | TCP | 聊天訊息 | 需要可靠傳輸、順序保證 |
-
-✅ GUI 不會凍結| **6679** | UDP | 狀態更新 | 低延遲、可容忍遺失 |
-
-```| **6680** | TCP | 檔案傳輸 | 大量資料、不阻塞聊天 |
-
-
-
----### 設計理念
-
-
-
-## 🧪 測試證明#### 1. 功能隔離
-
-- 聊天、狀態、檔案各自獨立
-
-### 測試 1: 多用戶- 一個功能故障不影響其他功能
-
-- 10 個客戶端同時發訊息
-
-- ✅ 全部立即送達，無延遲#### 2. 效能優化
-
-- 檔案傳輸不阻塞即時聊天
-
-### 測試 2: 大訊息- UDP 心跳減少 TCP 開銷
-
-- Alice 發送 10MB 訊息
-
-- Bob 同時發送正常訊息#### 3. 資源管理
-
-- ✅ Bob 的訊息立即送達- 可以針對不同埠口設定不同的優先級
-
-- 可以分別限流、監控
-
-### 測試 3: 檔案傳輸
-
-- Alice 傳送 100MB 檔案 (6680 port)## 🚀 使用方式
-
-- Bob 同時聊天 (6678 port)
-
-- ✅ 聊天立即送達，不受影響### 方法 1: 使用測試腳本 (推薦)
-
-
-
----```bash
-
-# 在專案根目錄執行
-
-## 📊 性能比較test_multi_port.bat
-
+✅ 接收訊息時用戶還能輸入
+✅ GUI 不會凍結
 ```
 
-| 測試項目 | Blocking | Nonblocking |
+## 🏗️ 架構設計
 
-|---------|---------|-------------|這會自動啟動:
+### 為什麼需要多埠口？
+- 聊天、狀態、檔案各自獨立
+- 一個功能故障不影響其他功能
+- 檔案傳輸不阻塞即時聊天
+- UDP 心跳減少 TCP 開銷
+- 可以針對不同埠口設定不同的優先級
+- 可以分別限流、監控
 
-| 10 用戶同時發訊息 | 延遲 > 5 秒 | < 0.1 秒 ✅ |- 1 個伺服器
+### 埠口分配
 
-| 傳檔案時聊天 | 被阻塞 ❌ | 不受影響 ✅ |- 2 個客戶端 (Alice & Bob)
+| Port | 協定 | 功能 | 原因 |
+|------|------|------|------|
+| **6678** | TCP | 聊天訊息 | 需要可靠傳輸、順序保證 |
+| **6679** | UDP | 狀態更新 | 低延遲、可容忍遺失 |
+| **6680** | TCP | 檔案傳輸 | 大量資料、不阻塞聊天 |
 
-| GUI 接收訊息 | 凍結 ❌ | 保持流暢 ✅ |
+## 🚀 使用方式
+
+### 方法 1: 使用測試腳本 (推薦)
+```bash
+# 在專案根目錄執行
+test_multi_port.bat
+```
+這會自動啟動:
+- 1 個伺服器
+- 2 個客戶端 (Alice & Bob)
 
 ### 方法 2: 手動啟動
 
----
-
 #### 啟動伺服器
-
-## 🚀 使用方式```bash
-
-python multi_port/multi_port_server.py
-
-```bash```
-
-# 啟動伺服器
-
-python nonblocking/nonblocking_server.py#### 啟動客戶端
-
 ```bash
-
-# 啟動客戶端# Alice
-
-python nonblocking/nonblocking_client.py --gui --nickname Alicepython multi_port/multi_port_client.py --gui --nickname Alice
-
+python multi_port/multi_port_server.py
 ```
+
+#### 啟動客戶端
+```bash
+# Alice
+python multi_port/multi_port_client.py --gui --nickname Alice
 
 # Bob
-
----python multi_port/multi_port_client.py --gui --nickname Bob
-
+python multi_port/multi_port_client.py --gui --nickname Bob
 ```
-
-## ✅ 結論
 
 ## 🎮 功能展示
 
-本系統使用:
-
-- ✅ 多執行緒 → 多用戶不阻塞### 1. 基本聊天
-
-- ✅ 多埠口 → 功能不阻塞- 在輸入框輸入訊息
-
-- ✅ 非同步設計 → GUI 不阻塞- 點擊 [📤 發送] 或按 Enter
-
+### 1. 基本聊天
+- 在輸入框輸入訊息
+- 點擊 [📤 發送] 或按 Enter
 - 訊息會加密傳輸到 TCP 6678
-
-完全符合 **+5 Nonblocking** 要求！
 
 ### 2. 檔案傳輸 ⭐
 1. 點擊 [📎 傳檔] 按鈕
@@ -200,7 +124,6 @@ python nonblocking/nonblocking_client.py --gui --nickname Alicepython multi_port
 ## 📊 技術實作
 
 ### 伺服器端
-
 ```python
 # 三個獨立的監聽埠口
 TCP 6678: handle_tcp_client()      # 聊天訊息
@@ -213,7 +136,6 @@ threading.Thread(target=handle_udp_messages, daemon=True)
 ```
 
 ### 客戶端
-
 ```python
 # 三個獨立的連線
 self.tcp_sock → 連到 6678 (聊天)
@@ -268,6 +190,22 @@ threading.Thread(target=self.send_file_thread, daemon=True)
 1. Alice 傳送 10MB 檔案
 2. Bob 同時發送聊天訊息
 3. 測量 Bob 的訊息是否立即送達
+
+## 🧪 測試證明
+
+### 測試 1: 多用戶
+- 10 個客戶端同時發訊息
+- ✅ 全部立即送達，無延遲
+
+### 測試 2: 大訊息
+- Alice 發送 10MB 訊息
+- Bob 同時發送正常訊息
+- ✅ Bob 的訊息立即送達
+
+### 測試 3: 檔案傳輸
+- Alice 傳送 100MB 檔案 (6680 port)
+- Bob 同時聊天 (6678 port)
+- ✅ 聊天立即送達，不受影響
 
 ## 🎯 報告重點
 
