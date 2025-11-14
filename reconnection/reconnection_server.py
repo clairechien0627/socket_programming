@@ -20,7 +20,7 @@ import sys
 # 添加父目錄到路徑
 sys.path.append(str(Path(__file__).parent.parent))
 
-from timeout.crypto_utils import CryptoManager
+from reconnection.crypto_utils import CryptoManager
 
 HOST = "0.0.0.0"
 TCP_PORT = 6678  # 使用不同的埠號
